@@ -1,9 +1,7 @@
 from pathlib import Path
 from typing import Optional, Union
 
-import mlx.core as mx
 import mlx.nn as nn
-import numpy as np
 
 from mlx_audio.utils import base_load_model
 
@@ -63,20 +61,3 @@ def load(
         >>> results = model.predict(audio)
     """
     return load_model(model_path, lazy=lazy, strict=strict, **kwargs)
-
-
-def normalize_audio(audio: mx.array) -> mx.array:
-    """Zero-mean unit-variance normalize audio for wav2vec2 input.
-
-    Args:
-        audio: Raw waveform, shape (T,) or (B, T).
-
-    Returns:
-        Normalized audio of shape (1, T) for 1D input, or (B, T) for 2D input.
-    """
-    if audio.ndim == 1:
-        audio = audio[None, :]
-
-    mean = mx.mean(audio, axis=-1, keepdims=True)
-    var = mx.var(audio, axis=-1, keepdims=True)
-    return (audio - mean) / mx.sqrt(var + 1e-7)

@@ -103,10 +103,13 @@ class Wav2Vec2ForSequenceClassification(nn.Module):
         input_values: mx.array,
         top_k: int = 5,
     ) -> list[tuple[str, float]]:
-        """Predict language from pre-processed audio.
+        """Predict language from raw audio waveform.
+
+        Automatically applies zero-mean unit-variance normalization
+        before inference.
 
         Args:
-            input_values: Normalized waveform, shape (T,) or (1, T).
+            input_values: Raw waveform, shape (T,) or (1, T).
                 Only single-sample inference is supported.
             top_k: Number of top predictions to return.
 
@@ -125,6 +128,11 @@ class Wav2Vec2ForSequenceClassification(nn.Module):
                 f"got batch size {input_values.shape[0]}. "
                 f"Use __call__() for batched inference."
             )
+
+        # Normalize: zero-mean, unit-variance
+        mean = mx.mean(input_values, axis=-1, keepdims=True)
+        var = mx.var(input_values, axis=-1, keepdims=True)
+        input_values = (input_values - mean) / mx.sqrt(var + 1e-7)
 
         logits = self(input_values)
         probs = mx.softmax(logits, axis=-1)

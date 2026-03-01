@@ -205,27 +205,6 @@ class TestWav2Vec2ForSequenceClassification(unittest.TestCase):
 
 
 class TestLidUtils(unittest.TestCase):
-    def test_normalize_audio_1d(self):
-        from mlx_audio.lid.utils import normalize_audio
-
-        audio = mx.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        normalized = normalize_audio(audio)
-        mx.eval(normalized)
-
-        self.assertEqual(normalized.ndim, 2)
-        self.assertEqual(normalized.shape[0], 1)
-        mean = float(mx.mean(normalized))
-        self.assertAlmostEqual(mean, 0.0, places=5)
-
-    def test_normalize_audio_2d(self):
-        from mlx_audio.lid.utils import normalize_audio
-
-        audio = mx.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
-        normalized = normalize_audio(audio)
-        mx.eval(normalized)
-
-        self.assertEqual(normalized.shape, (2, 3))
-
     def test_model_remapping_is_empty(self):
         from mlx_audio.lid.utils import MODEL_REMAPPING
 

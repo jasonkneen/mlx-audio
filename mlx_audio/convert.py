@@ -103,12 +103,10 @@ DOMAIN_CONFIGS = {
         cli_example="python -c \"from mlx_audio.lid import load; model = load('{repo}'); print(model.predict(audio))\"",
         python_example="""
         from mlx_audio.lid import load
-        from mlx_audio.lid.utils import normalize_audio
         from mlx_audio.utils import load_audio
 
         model = load("{repo}")
         audio = load_audio("path_to_audio.wav", sample_rate=16000)  # LID requires 16kHz
-        audio = normalize_audio(audio)
         results = model.predict(audio, top_k=5)
         for lang, prob in results:
             print(f"{lang}: {prob:.1%}")
