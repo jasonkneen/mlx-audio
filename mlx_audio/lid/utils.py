@@ -7,7 +7,10 @@ from mlx_audio.utils import base_load_model
 
 SAMPLE_RATE = 16000
 
-MODEL_REMAPPING = {}
+MODEL_REMAPPING = {
+    "ecapa-tdnn": "ecapa_tdnn",
+    "ecapa_tdnn": "ecapa_tdnn",
+}
 
 
 def load_model(

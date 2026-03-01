@@ -1,1 +1,1 @@
-from . import wav2vec2
+from . import ecapa_tdnn, wav2vec2

@@ -205,10 +205,11 @@ class TestWav2Vec2ForSequenceClassification(unittest.TestCase):
 
 
 class TestLidUtils(unittest.TestCase):
-    def test_model_remapping_is_empty(self):
+    def test_model_remapping_has_ecapa(self):
         from mlx_audio.lid.utils import MODEL_REMAPPING
 
-        self.assertEqual(MODEL_REMAPPING, {})
+        self.assertIn("ecapa-tdnn", MODEL_REMAPPING)
+        self.assertEqual(MODEL_REMAPPING["ecapa-tdnn"], "ecapa_tdnn")
 
     def test_sample_rate(self):
         from mlx_audio.lid.utils import SAMPLE_RATE
@@ -251,6 +252,205 @@ class TestLidCategoryRouting(unittest.TestCase):
 
         category = get_model_category("wav2vec2", ["wav2vec2", "base"])
         self.assertNotEqual(category, "lid")
+
+
+# ---- ECAPA-TDNN Tests ----
+
+
+class TestEcapaTdnnConfig(unittest.TestCase):
+    def setUp(self):
+        from mlx_audio.lid.models.ecapa_tdnn.config import ModelConfig
+
+        self.ModelConfig = ModelConfig
+
+    def test_default_values(self):
+        config = self.ModelConfig()
+        self.assertEqual(config.n_mels, 60)
+        self.assertEqual(config.channels, 1024)
+        self.assertEqual(config.res2net_scale, 8)
+        self.assertEqual(config.se_channels, 128)
+        self.assertEqual(config.embedding_dim, 256)
+        self.assertEqual(config.classifier_hidden_dim, 512)
+        self.assertEqual(config.num_classes, 107)
+        self.assertIsNone(config.id2label)
+
+    def test_custom_values(self):
+        config = self.ModelConfig(channels=512, embedding_dim=128)
+        self.assertEqual(config.channels, 512)
+        self.assertEqual(config.embedding_dim, 128)
+
+    def test_id2label_sets_num_classes(self):
+        labels = {str(i): f"{i}: lang_{i}" for i in range(50)}
+        config = self.ModelConfig(id2label=labels)
+        self.assertEqual(config.num_classes, 50)
+
+    def test_kernel_sizes_and_dilations(self):
+        config = self.ModelConfig()
+        self.assertEqual(config.kernel_sizes, [5, 3, 3, 3, 1])
+        self.assertEqual(config.dilations, [1, 2, 3, 4, 1])
+
+
+class TestEcapaTdnnModel(unittest.TestCase):
+    def setUp(self):
+        from mlx_audio.lid.models.ecapa_tdnn.config import ModelConfig
+        from mlx_audio.lid.models.ecapa_tdnn.ecapa_tdnn import EcapaTdnn
+
+        self.ModelConfig = ModelConfig
+        self.Model = EcapaTdnn
+        self.config = ModelConfig(
+            channels=64,
+            res2net_scale=2,
+            se_channels=16,
+            attention_channels=16,
+            embedding_dim=32,
+            classifier_hidden_dim=32,
+            num_classes=10,
+        )
+
+    def test_model_init(self):
+        model = self.Model(self.config)
+        self.assertIsNotNone(model.embedding_model)
+        self.assertIsNotNone(model.classifier)
+
+    def test_forward_output_shape(self):
+        model = self.Model(self.config)
+        mel = mx.random.normal((1, 100, 60))
+        log_probs = model(mel)
+        mx.eval(log_probs)
+        self.assertEqual(log_probs.shape[0], 1)
+        self.assertEqual(log_probs.shape[1], self.config.num_classes)
+
+    def test_forward_log_probs_sum(self):
+        model = self.Model(self.config)
+        mel = mx.random.normal((1, 100, 60))
+        log_probs = model(mel)
+        probs = mx.exp(log_probs)
+        mx.eval(probs)
+        total = float(mx.sum(probs[0]).item())
+        self.assertAlmostEqual(total, 1.0, places=3)
+
+    def test_predict_returns_sorted(self):
+        model = self.Model(self.config)
+        labels = {str(i): f"lang_{i}" for i in range(10)}
+        model.config.id2label = labels
+        model.id2label = {int(k): v for k, v in labels.items()}
+
+        audio = mx.random.normal((16000,))
+        results = model.predict(audio, top_k=3)
+
+        self.assertEqual(len(results), 3)
+        probs = [p for _, p in results]
+        self.assertEqual(probs, sorted(probs, reverse=True))
+
+    def test_predict_without_id2label(self):
+        model = self.Model(self.config)
+        model.id2label = {}
+        audio = mx.random.normal((16000,))
+        results = model.predict(audio, top_k=2)
+        for label, _ in results:
+            self.assertTrue(label.startswith("LABEL_"))
+
+
+class TestEcapaTdnnSanitize(unittest.TestCase):
+    def setUp(self):
+        from mlx_audio.lid.models.ecapa_tdnn.config import ModelConfig
+        from mlx_audio.lid.models.ecapa_tdnn.ecapa_tdnn import EcapaTdnn
+
+        self.model = EcapaTdnn(
+            ModelConfig(
+                channels=64,
+                res2net_scale=2,
+                se_channels=16,
+                attention_channels=16,
+                embedding_dim=32,
+                classifier_hidden_dim=32,
+                num_classes=10,
+            )
+        )
+
+    def test_drops_num_batches_tracked(self):
+        weights = {
+            "embedding_model.blocks.0.norm.norm.num_batches_tracked": mx.array(0),
+            "embedding_model.blocks.0.conv.conv.weight": mx.zeros((64, 5, 60)),
+        }
+        sanitized = self.model.sanitize(weights)
+        self.assertEqual(len(sanitized), 1)
+        self.assertNotIn(
+            "embedding_model.blocks.0.norm.norm.num_batches_tracked", sanitized
+        )
+
+    def test_remaps_block_indices(self):
+        weights = {
+            "embedding_model.blocks.0.conv.conv.weight": mx.zeros((64, 5, 60)),
+            "embedding_model.blocks.1.tdnn1.conv.conv.weight": mx.zeros((64, 1, 64)),
+        }
+        sanitized = self.model.sanitize(weights)
+        self.assertIn("embedding_model.block0.conv.weight", sanitized)
+        self.assertIn("embedding_model.block1.tdnn1.conv.weight", sanitized)
+
+    def test_flattens_double_nesting(self):
+        weights = {
+            "embedding_model.block0.conv.conv.weight": mx.zeros((64, 5, 60)),
+            "embedding_model.block0.norm.norm.weight": mx.zeros((64,)),
+        }
+        sanitized = self.model.sanitize(weights)
+        self.assertIn("embedding_model.block0.conv.weight", sanitized)
+        self.assertIn("embedding_model.block0.norm.weight", sanitized)
+
+    def test_se_block_conv_flatten(self):
+        weights = {
+            "embedding_model.block1.se_block.conv1.conv.weight": mx.zeros((16, 1, 64)),
+            "embedding_model.block1.se_block.conv2.conv.weight": mx.zeros((64, 1, 16)),
+        }
+        sanitized = self.model.sanitize(weights)
+        self.assertIn("embedding_model.block1.se_block.conv1.weight", sanitized)
+        self.assertIn("embedding_model.block1.se_block.conv2.weight", sanitized)
+
+    def test_asp_bn_and_fc_flatten(self):
+        weights = {
+            "embedding_model.asp_bn.norm.weight": mx.zeros((384,)),
+            "embedding_model.fc.conv.weight": mx.zeros((32, 1, 384)),
+        }
+        sanitized = self.model.sanitize(weights)
+        self.assertIn("embedding_model.asp_bn.weight", sanitized)
+        self.assertIn("embedding_model.fc.weight", sanitized)
+
+
+class TestEcapaMelSpectrogram(unittest.TestCase):
+    def test_output_shape(self):
+        from mlx_audio.lid.models.ecapa_tdnn.mel import compute_mel_spectrogram
+
+        audio = mx.random.normal((16000,))
+        mel = compute_mel_spectrogram(audio)
+        mx.eval(mel)
+        self.assertEqual(mel.ndim, 3)
+        self.assertEqual(mel.shape[0], 1)
+        self.assertEqual(mel.shape[2], 60)
+        self.assertGreater(mel.shape[1], 0)
+
+    def test_empty_audio(self):
+        from mlx_audio.lid.models.ecapa_tdnn.mel import compute_mel_spectrogram
+
+        audio = mx.array([])
+        mel = compute_mel_spectrogram(audio)
+        mx.eval(mel)
+        self.assertEqual(mel.shape[0], 1)
+        self.assertEqual(mel.shape[2], 60)
+
+
+class TestEcapaTdnnExports(unittest.TestCase):
+    def test_model_exports(self):
+        from mlx_audio.lid.models.ecapa_tdnn import DETECTION_HINTS, Model, ModelConfig
+
+        self.assertTrue(hasattr(ModelConfig, "n_mels"))
+        self.assertIn("config_keys", DETECTION_HINTS)
+        self.assertIn("architectures", DETECTION_HINTS)
+
+    def test_detection_hints_content(self):
+        from mlx_audio.lid.models.ecapa_tdnn import DETECTION_HINTS
+
+        self.assertIn("res2net_scale", DETECTION_HINTS["config_keys"])
+        self.assertIn("EcapaTdnn", DETECTION_HINTS["architectures"])
 
 
 if __name__ == "__main__":
